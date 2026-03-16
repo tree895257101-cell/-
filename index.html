@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>多产品报价单系统 (飞书集成版)</title>
+    <title>多产品报价单系统 (Airtable自动保存版)</title>
     <script src="https://cdn.tailwindcss.com"></script>
     <link href="https://cdn.jsdelivr.net/npm/font-awesome@4.7.0/css/font-awesome.min.css" rel="stylesheet">
     <script src="https://html2canvas.hertzen.com/dist/html2canvas.min.js"></script>
@@ -52,226 +52,12 @@
         }
     </style>
     
-    <!-- ===== 飞书API配置 - 请填写你的信息 ===== -->
+    <!-- ===== Airtable配置 - 请填写你的信息 ===== -->
     <script>
-        const FEISHU_CONFIG = {
-            appId: 'cli_a939086dbcb85bcd',                    // 从飞书开放平台获取
-            appSecret: 'fJssZTx0JYqM2MkZYqHVKbCW5ymybJY6',             // 从飞书开放平台获取
-            quotationTableToken: 'JwGybJEx1a363hsqMY3cq2HmnYf',  // 第一个表格：存所有报价（含JSON）
-            productTableToken: 'JwGybJEx1a363hsqMY3cq2HmnYf',    // 第二个表格：存下单后的明细
-            baseUrl: 'https://open.feishu.cn/open-apis'
-        };
-
-        // 飞书API工具函数
-        const FeishuAPI = {
-            accessToken: null,
-            tokenExpireTime: 0,
-
-            // 获取访问token
-            async getAccessToken() {
-                if (this.accessToken && Date.now() < this.tokenExpireTime) {
-                    return this.accessToken;
-                }
-
-                try {
-                    const response = await fetch(`${FEISHU_CONFIG.baseUrl}/auth/v3/tenant_access_token/internal`, {
-                        method: 'POST',
-                        headers: { 'Content-Type': 'application/json' },
-                        body: JSON.stringify({
-                            app_id: FEISHU_CONFIG.appId,
-                            app_secret: FEISHU_CONFIG.appSecret
-                        })
-                    });
-
-                    const data = await response.json();
-                    if (data.code === 0) {
-                        this.accessToken = data.tenant_access_token;
-                        this.tokenExpireTime = Date.now() + (data.expire - 600) * 1000;
-                        return this.accessToken;
-                    } else {
-                        throw new Error(`获取token失败: ${data.msg}`);
-                    }
-                } catch (error) {
-                    console.error('获取飞书token失败:', error);
-                    throw error;
-                }
-            },
-
-            // 添加记录到指定表格
-            async addRecord(tableToken, fields) {
-                const token = await this.getAccessToken();
-                
-                const response = await fetch(`${FEISHU_CONFIG.baseUrl}/bitable/v1/apps/${tableToken}/tables/${tableToken}/records`, {
-                    method: 'POST',
-                    headers: {
-                        'Authorization': `Bearer ${token}`,
-                        'Content-Type': 'application/json'
-                    },
-                    body: JSON.stringify({ fields: fields })
-                });
-
-                const data = await response.json();
-                if (data.code === 0) {
-                    return data.data;
-                } else {
-                    throw new Error(`添加记录失败: ${data.msg}`);
-                }
-            },
-
-            // 搜索记录
-            async searchRecords(tableToken, fieldName, keyword) {
-                const token = await this.getAccessToken();
-                
-                const response = await fetch(`${FEISHU_CONFIG.baseUrl}/bitable/v1/apps/${tableToken}/tables/${tableToken}/records/search`, {
-                    method: 'POST',
-                    headers: {
-                        'Authorization': `Bearer ${token}`,
-                        'Content-Type': 'application/json'
-                    },
-                    body: JSON.stringify({
-                        filter: `${fieldName} CONTAINS "${keyword}"`
-                    })
-                });
-
-                const data = await response.json();
-                return data.code === 0 ? data.data.items : [];
-            },
-
-            // 根据ID获取记录
-            async getRecord(tableToken, recordId) {
-                const token = await this.getAccessToken();
-                
-                const response = await fetch(`${FEISHU_CONFIG.baseUrl}/bitable/v1/apps/${tableToken}/tables/${tableToken}/records/${recordId}`, {
-                    headers: {
-                        'Authorization': `Bearer ${token}`
-                    }
-                });
-
-                const data = await response.json();
-                return data.code === 0 ? data.data : null;
-            },
-
-            // 同步报价单到飞书
-            async syncQuotationToSheet(quotationData, isOrder = false) {
-                try {
-                    // 1. 先保存到报价记录表（主表）- 任何时候都保存
-                    const quotationFields = {
-                        "记录ID": quotationData.id,
-                        "保存时间": new Date().toLocaleString(),
-                        "业务员": quotationData.salesman || '',
-                        "发票编号": quotationData.invoiceNumber || '',
-                        "发票日期": quotationData.invoiceDate || '',
-                        "客户名称": quotationData.customerName || '',
-                        "联系方式": quotationData.customerContact || '',
-                        "国家": quotationData.customerCountry || '',
-                        "客户地址": quotationData.customerAddress || '',
-                        "清关方式": quotationData.customsClearance || '',
-                        "运费": parseFloat(quotationData.shippingFee) || 0,
-                        "运费成本": parseFloat(quotationData.shippingCost) || 0,
-                        "总价": parseFloat(quotationData.totalPrice) || 0,
-                        "总利润": parseFloat(quotationData.totalProfit) || 0,
-                        "利润率": quotationData.profitMargin || '0%',
-                        "下单状态": isOrder ? '已下单' : '未下单',
-                        "下单时间": isOrder ? new Date().toLocaleString() : '',
-                        "产品数据": JSON.stringify(quotationData.products || [])  // 保存产品JSON
-                    };
-
-                    await this.addRecord(FEISHU_CONFIG.quotationTableToken, quotationFields);
-
-                    // 2. 如果是下单操作，才保存到订单明细表
-                    if (isOrder && quotationData.products && quotationData.products.length > 0) {
-                        for (let i = 0; i < quotationData.products.length; i++) {
-                            const product = quotationData.products[i];
-                            
-                            // 按你的订单明细表字段构建
-                            const orderDetailFields = {
-                                "订单编号": quotationData.id,                    // 对应订单ID
-                                "成交人": quotationData.salesman || '',          // 对应业务员
-                                "客户名": quotationData.customerName || '',      // 对应客户名称
-                                "联系方式": quotationData.customerContact || '', // 对应联系方式
-                                "国家": quotationData.customerCountry || '',     // 对应国家
-                                "日期": quotationData.invoiceDate || '',         // 对应发票日期
-                                "产品型号": product.model || '',                  // 对应型号
-                                "客单价($)": parseFloat(product.unitPrice) || 0, // 对应单价
-                                "数量": parseInt(product.quantity) || 0,         // 对应数量
-                                "付款金额($)": parseFloat(product.clothesTotal) || 0, // 对应衣服总价
-                                // 运费只填在第一个产品行
-                                "运费($)": i === 0 ? (parseFloat(quotationData.shippingFee) || 0) : 0
-                            };
-
-                            await this.addRecord(FEISHU_CONFIG.productTableToken, orderDetailFields);
-                        }
-                    }
-
-                    return true;
-                } catch (error) {
-                    console.error('同步到飞书失败:', error);
-                    throw error;
-                }
-            },
-
-            // 从飞书搜索报价记录
-            async searchQuotations(keyword) {
-                try {
-                    const records = await this.searchRecords(FEISHU_CONFIG.quotationTableToken, '客户名称', keyword);
-                    
-                    return records.map(record => ({
-                        id: record.fields['记录ID'] || record.record_id,
-                        recordId: record.record_id,
-                        saveDate: record.fields['保存时间'] || '',
-                        customerName: record.fields['客户名称'] || '',
-                        salesman: record.fields['业务员'] || '',
-                        totalPrice: record.fields['总价'] || '0',
-                        totalProfit: record.fields['总利润'] || '0',
-                        orderStatus: record.fields['下单状态'] || '未下单'
-                    }));
-                } catch (error) {
-                    console.error('搜索报价记录失败:', error);
-                    return [];
-                }
-            },
-
-            // 加载完整的报价记录
-            async loadQuotation(recordId) {
-                try {
-                    const record = await this.getRecord(FEISHU_CONFIG.quotationTableToken, recordId);
-                    if (!record) return null;
-
-                    const fields = record.fields;
-                    
-                    // 解析产品数据
-                    let products = [];
-                    try {
-                        products = JSON.parse(fields['产品数据'] || '[]');
-                    } catch (e) {
-                        products = [];
-                    }
-
-                    return {
-                        id: fields['记录ID'] || recordId,
-                        recordId: recordId,
-                        salesman: fields['业务员'] || '',
-                        invoiceNumber: fields['发票编号'] || '',
-                        invoiceDate: fields['发票日期'] || '',
-                        customerName: fields['客户名称'] || '',
-                        customerContact: fields['联系方式'] || '',
-                        customerCountry: fields['国家'] || '',
-                        customerAddress: fields['客户地址'] || '',
-                        customsClearance: fields['清关方式'] || '',
-                        shippingFee: fields['运费']?.toString() || '',
-                        shippingCost: fields['运费成本']?.toString() || '',
-                        totalPrice: fields['总价']?.toString() || '',
-                        totalProfit: fields['总利润']?.toString() || '',
-                        profitMargin: fields['利润率'] || '0%',
-                        orderStatus: fields['下单状态'] || '未下单',
-                        orderDate: fields['下单时间'] || '',
-                        products: products
-                    };
-                } catch (error) {
-                    console.error('加载报价记录失败:', error);
-                    return null;
-                }
-            }
+        const AIRTABLE_CONFIG = {
+            token: 'patXXXXXXXXXXXXXX',      // 你的个人访问令牌（以pat开头）
+            baseId: 'appXXXXXXXXXXXXXX',     // 你的BaseID（从URL获取）
+            tableName: '报价记录'              // 你的表格名称
         };
     </script>
 </head>
@@ -280,7 +66,7 @@
         <!-- 页面标题 -->
         <header class="mb-6 text-center">
             <h1 class="text-[clamp(1.5rem,4vw,2.2rem)] font-bold text-dark mb-1">多产品报价单系统</h1>
-            <p class="text-gray-600 text-sm md:text-base">专业报价 · 高效管理 · 飞书同步</p>
+            <p class="text-gray-600 text-sm md:text-base">专业报价 · 自动保存 · 云端同步</p>
         </header>
 
         <!-- 主要内容区 -->
@@ -293,13 +79,10 @@
                         <h2 class="text-lg font-semibold flex items-center text-primary">
                             <i class="fa fa-user-circle mr-2"></i>客户信息
                         </h2>
-                        <!-- 客户状态按钮组 -->
+                        <!-- 保存按钮 -->
                         <div class="flex gap-2">
                             <button id="saveQuotationBtn" class="text-sm bg-secondary hover:bg-secondary/90 text-white px-3 py-1.5 rounded flex items-center btn-effect">
                                 <i class="fa fa-save mr-1"></i>保存报价单
-                            </button>
-                            <button id="orderConfirmedBtn" class="text-sm bg-primary hover:bg-primary/90 text-white px-3 py-1.5 rounded flex items-center btn-effect">
-                                <i class="fa fa-check-circle mr-1"></i>客户已下单
                             </button>
                         </div>
                     </div>
@@ -412,16 +195,16 @@
                 <!-- 报价记录搜索 -->
                 <div class="bg-white rounded-xl shadow p-5 card-hover">
                     <h2 class="text-lg font-semibold mb-4 flex items-center text-primary">
-                        <i class="fa fa-search mr-2"></i>报价记录搜索
+                        <i class="fa fa-search mr-2"></i>搜索历史报价
                     </h2>
                     <div class="flex gap-2">
-                        <input type="text" id="searchQuotationInput" placeholder="输入客户名称模糊搜索..." class="flex-1 px-3 py-2 border border-gray-300 rounded-lg form-focus">
+                        <input type="text" id="searchQuotationInput" placeholder="输入客户名称搜索..." class="flex-1 px-3 py-2 border border-gray-300 rounded-lg form-focus">
                         <button id="searchQuotationBtn" class="bg-primary hover:bg-primary/90 text-white font-medium px-4 py-2 rounded-lg transition duration-300 flex items-center btn-effect">
                             <i class="fa fa-search mr-2"></i>搜索
                         </button>
                     </div>
                     <!-- 搜索结果 -->
-                    <div id="searchResults" class="mt-2 max-h-60 overflow-y-auto hidden border border-gray-200 rounded-lg bg-white shadow-lg">
+                    <div id="searchResults" class="mt-2 max-h-60 overflow-y-auto border border-gray-200 rounded-lg bg-white shadow-lg" style="display: none;">
                     </div>
                 </div>
 
@@ -751,7 +534,7 @@
         </div>
 
         <footer class="mt-10 text-center text-gray-500 text-sm py-4">
-            <p>多产品报价单系统 © 2023 - 飞书集成版</p>
+            <p>多产品报价单系统 © 2023 - Airtable自动保存版</p>
         </footer>
     </div>
 
@@ -1591,7 +1374,7 @@
             reader.readAsText(file);
         }
 
-        // ========== 飞书数据同步功能 ==========
+        // ========== Airtable自动保存功能 ==========
         // 收集当前报价单数据
         function collectQuotationData() {
             const products = [];
@@ -1612,7 +1395,7 @@
 
             return {
                 id: Date.now().toString(),
-                saveDate: new Date().toISOString(),
+                saveDate: new Date().toISOString().split('T')[0],
                 salesman: salesmanInput.value,
                 invoiceNumber: invoiceNumberInput.value,
                 invoiceDate: invoiceDateInput.value,
@@ -1628,13 +1411,11 @@
                 shippingProfit: shippingProfitElement.textContent,
                 totalProfit: totalProfitElement.textContent,
                 profitMargin: profitMarginElement.textContent,
-                products: products,
-                orderStatus: '未下单',
-                orderDate: ''
+                products: products
             };
         }
 
-        // 保存报价单到飞书
+        // 保存报价单到Airtable
         async function saveQuotation() {
             const quotationData = collectQuotationData();
             
@@ -1646,176 +1427,98 @@
             try {
                 const saveBtn = document.getElementById('saveQuotationBtn');
                 const originalText = saveBtn.innerHTML;
-                saveBtn.innerHTML = '<i class="fa fa-spinner fa-spin mr-1"></i>同步中...';
+                saveBtn.innerHTML = '<i class="fa fa-spinner fa-spin mr-1"></i>保存中...';
                 saveBtn.disabled = true;
 
-                await FeishuAPI.syncQuotationToSheet(quotationData, false);
+                // 准备要发送到Airtable的数据
+                const fields = {
+                    "记录ID": quotationData.id,
+                    "保存时间": quotationData.saveDate,
+                    "业务员": quotationData.salesman || '',
+                    "客户名称": quotationData.customerName || '',
+                    "联系方式": quotationData.customerContact || '',
+                    "国家": quotationData.customerCountry || '',
+                    "客户地址": quotationData.customerAddress || '',
+                    "总价": parseFloat(quotationData.totalPrice) || 0,
+                    "总利润": parseFloat(quotationData.totalProfit) || 0,
+                    "利润率": parseFloat(quotationData.profitMargin) / 100 || 0,
+                    "产品数据": JSON.stringify(quotationData.products || [])
+                };
+
+                // 调用Airtable API（使用个人访问令牌）
+                const response = await fetch(`https://api.airtable.com/v0/${AIRTABLE_CONFIG.baseId}/${encodeURIComponent(AIRTABLE_CONFIG.tableName)}`, {
+                    method: 'POST',
+                    headers: {
+                        'Authorization': `Bearer ${AIRTABLE_CONFIG.token}`,
+                        'Content-Type': 'application/json'
+                    },
+                    body: JSON.stringify({ fields: fields })
+                });
+
+                const data = await response.json();
                 
+                if (data.error) {
+                    throw new Error(data.error.message || '保存失败');
+                }
+
                 saveBtn.innerHTML = originalText;
                 saveBtn.disabled = false;
                 
-                alert('报价单保存成功！');
+                alert('✅ 报价单自动保存成功！可在Airtable中查看');
+                
             } catch (error) {
                 console.error('保存失败:', error);
                 alert('保存失败：' + error.message);
+                saveBtn.innerHTML = originalText;
+                saveBtn.disabled = false;
             }
         }
 
-        // 客户已下单
-        async function handleOrderConfirmed() {
-            const quotationData = collectQuotationData();
+        // 从Airtable搜索报价记录
+        async function searchQuotations() {
+            const keyword = document.getElementById('searchQuotationInput').value;
             
-            if (!quotationData.customerName) {
-                alert('请填写客户名称');
-                return;
-            }
-
-            try {
-                const orderBtn = document.getElementById('orderConfirmedBtn');
-                const originalText = orderBtn.innerHTML;
-                orderBtn.innerHTML = '<i class="fa fa-spinner fa-spin mr-1"></i>处理中...';
-                orderBtn.disabled = true;
-
-                quotationData.orderStatus = '已下单';
-                quotationData.orderDate = new Date().toLocaleString();
-
-                await FeishuAPI.syncQuotationToSheet(quotationData, true);
-
-                orderBtn.innerHTML = originalText;
-                orderBtn.disabled = false;
-                
-                alert('订单已确认！');
-            } catch (error) {
-                console.error('下单失败:', error);
-                alert('下单失败：' + error.message);
-            }
-        }
-
-        // 搜索报价记录
-        async function searchQuotations(keyword) {
             if (!keyword.trim()) {
-                document.getElementById('searchResults').classList.add('hidden');
+                alert('请输入客户名称');
                 return;
             }
 
             try {
-                const results = await FeishuAPI.searchQuotations(keyword);
-                displaySearchResults(results);
+                // 调用Airtable搜索API
+                const response = await fetch(`https://api.airtable.com/v0/${AIRTABLE_CONFIG.baseId}/${encodeURIComponent(AIRTABLE_CONFIG.tableName)}?filterByFormula={客户名称}="${keyword}"`, {
+                    headers: {
+                        'Authorization': `Bearer ${AIRTABLE_CONFIG.token}`
+                    }
+                });
+
+                const data = await response.json();
+                
+                if (data.error) {
+                    throw new Error(data.error.message);
+                }
+
+                // 显示搜索结果
+                const resultsDiv = document.getElementById('searchResults');
+                let resultHtml = '';
+                
+                if (data.records && data.records.length > 0) {
+                    data.records.forEach(record => {
+                        resultHtml += `
+                            <div class="p-2 border-b hover:bg-gray-100 cursor-pointer" onclick="alert('点击加载功能待实现：' + '${record.id}')">
+                                ${record.fields['客户名称'] || '未知'} - $${record.fields['总价'] || 0} (${record.fields['保存时间'] || ''})
+                            </div>
+                        `;
+                    });
+                } else {
+                    resultHtml = '<div class="p-2">未找到记录</div>';
+                }
+
+                resultsDiv.innerHTML = resultHtml;
+                resultsDiv.style.display = 'block';
+                
             } catch (error) {
                 console.error('搜索失败:', error);
                 alert('搜索失败：' + error.message);
-            }
-        }
-
-        // 显示搜索结果
-        function displaySearchResults(results) {
-            const resultsDiv = document.getElementById('searchResults');
-            if (results.length === 0) {
-                resultsDiv.innerHTML = '<div class="p-3 text-center text-gray-500">未找到相关记录</div>';
-                resultsDiv.classList.remove('hidden');
-                return;
-            }
-
-            let html = '';
-            results.forEach(result => {
-                html += `
-                    <div class="p-3 border-b border-gray-100 hover:bg-gray-50 cursor-pointer" data-record-id="${result.recordId}">
-                        <div class="font-medium">${result.customerName || '未命名'}</div>
-                        <div class="text-xs text-gray-500 flex justify-between">
-                            <span>业务员: ${result.salesman || '-'}</span>
-                            <span>日期: ${result.saveDate || ''}</span>
-                        </div>
-                        <div class="text-xs text-gray-500">
-                            总价: $${result.totalPrice || '0'} | 状态: ${result.orderStatus || '未下单'}
-                        </div>
-                    </div>
-                `;
-            });
-
-            resultsDiv.innerHTML = html;
-            resultsDiv.classList.remove('hidden');
-
-            resultsDiv.querySelectorAll('[data-record-id]').forEach(el => {
-                el.addEventListener('click', () => loadQuotation(el.dataset.recordId));
-            });
-        }
-
-        // 加载报价记录
-        async function loadQuotation(recordId) {
-            try {
-                const quotation = await FeishuAPI.loadQuotation(recordId);
-                if (!quotation) {
-                    alert('加载失败：找不到该记录');
-                    return;
-                }
-
-                if (!confirm('加载将覆盖当前所有数据，确定继续吗？')) {
-                    return;
-                }
-
-                // 重置当前数据
-                productsContainer.innerHTML = '';
-                productCount = 0;
-                uploadedImages = { design: {}, payment: null };
-                resetImageUpload(paymentImageInput, paymentPreview, 'payment');
-
-                // 加载客户信息
-                salesmanInput.value = quotation.salesman || '';
-                invoiceNumberInput.value = quotation.invoiceNumber || '';
-                invoiceDateInput.value = quotation.invoiceDate || '';
-                customerNameInput.value = quotation.customerName || '';
-                if (document.getElementById('customerContact')) {
-                    document.getElementById('customerContact').value = quotation.customerContact || '';
-                }
-                if (document.getElementById('customerCountry')) {
-                    document.getElementById('customerCountry').value = quotation.customerCountry || '';
-                }
-                customerAddressInput.value = quotation.customerAddress || '';
-                customsClearanceInput.value = quotation.customsClearance || '';
-                shippingFeeInput.value = quotation.shippingFee || '';
-                shippingCostInput.value = quotation.shippingCost || '';
-
-                // 加载产品
-                if (quotation.products && quotation.products.length > 0) {
-                    quotation.products.forEach((prod, index) => {
-                        const newIndex = index + 1;
-                        const newProductForm = createProductForm(newIndex);
-                        productsContainer.appendChild(newProductForm);
-                        
-                        const modelSelect = document.getElementById(`model-${newIndex}`);
-                        modelSelect.value = prod.model || '';
-                        modelSelect.dispatchEvent(new Event('change'));
-                        
-                        document.getElementById(`printing-${newIndex}`).value = prod.printing || '';
-                        document.getElementById(`quantity-${newIndex}`).value = prod.quantity || '';
-                        document.getElementById(`clothesCost-${newIndex}`).value = prod.clothesCost || '';
-                        document.getElementById(`laborCostPerUnit-${newIndex}`).value = prod.laborCostPerUnit || '';
-                        document.getElementById(`sampleFee-${newIndex}`).value = prod.sampleFee || '';
-                        document.getElementById(`unitPrice-${newIndex}`).value = prod.unitPrice || '';
-                        
-                        const inputs = newProductForm.querySelectorAll('.product-input:not([readonly])');
-                        inputs.forEach(input => input.dispatchEvent(new Event('input')));
-                    });
-                } else {
-                    addNewProduct();
-                }
-
-                // 重新计算
-                calculateTotalPrice();
-                calculateAllProductsProfit();
-                calculateShippingProfit();
-                calculateTotalProfit();
-                calculateProfitMargin();
-                updateQuotationPreview();
-                updateInvoicePreview();
-
-                // 关闭搜索结果
-                document.getElementById('searchResults').classList.add('hidden');
-                
-                alert('加载成功！');
-            } catch (error) {
-                console.error('加载失败:', error);
-                alert('加载失败：' + error.message);
             }
         }
 
@@ -2077,40 +1780,28 @@
             confirmDeleteModal.addEventListener('click', function(e) { if (e.target === this) { confirmDeleteModal.classList.add('hidden'); currentDeleteModel = null; } });
             imageViewerModal.addEventListener('click', function(e) { if (e.target === this) imageViewerModal.classList.add('hidden'); });
 
-            // 绑定新功能的事件
+            // 绑定Airtable保存和搜索事件
             const saveQuotationBtn = document.getElementById('saveQuotationBtn');
-            const orderConfirmedBtn = document.getElementById('orderConfirmedBtn');
             const searchQuotationBtn = document.getElementById('searchQuotationBtn');
-            const searchQuotationInput = document.getElementById('searchQuotationInput');
-            const searchResults = document.getElementById('searchResults');
 
             if (saveQuotationBtn) {
                 saveQuotationBtn.addEventListener('click', saveQuotation);
             }
 
-            if (orderConfirmedBtn) {
-                orderConfirmedBtn.addEventListener('click', handleOrderConfirmed);
+            if (searchQuotationBtn) {
+                searchQuotationBtn.addEventListener('click', searchQuotations);
             }
 
-            if (searchQuotationBtn && searchQuotationInput) {
-                searchQuotationBtn.addEventListener('click', () => {
-                    searchQuotations(searchQuotationInput.value);
-                });
-
-                searchQuotationInput.addEventListener('keypress', (e) => {
-                    if (e.key === 'Enter') {
-                        searchQuotations(searchQuotationInput.value);
-                    }
-                });
-
-                document.addEventListener('click', (e) => {
-                    if (!searchResults.contains(e.target) && 
-                        e.target !== searchQuotationInput && 
-                        e.target !== searchQuotationBtn) {
-                        searchResults.classList.add('hidden');
-                    }
-                });
-            }
+            // 点击其他地方隐藏搜索结果
+            document.addEventListener('click', function(e) {
+                const resultsDiv = document.getElementById('searchResults');
+                const searchInput = document.getElementById('searchQuotationInput');
+                const searchBtn = document.getElementById('searchQuotationBtn');
+                
+                if (!resultsDiv.contains(e.target) && e.target !== searchInput && e.target !== searchBtn) {
+                    resultsDiv.style.display = 'none';
+                }
+            });
         }
 
         document.addEventListener('DOMContentLoaded', init);
